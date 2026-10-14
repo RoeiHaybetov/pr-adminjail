@@ -100,7 +100,11 @@ function Identity.Parse(text)
 
     -- Bare values. Steam hex is checked BEFORE the Discord rule: a steam hex whose account
     -- digits are all 0-9 is otherwise indistinguishable from a number.
-    if text:match('^7656119%d+$') then return 'steam', normalise('steam', text) end
+    if text:match('^7656119%d+$') then
+        local v = normalise('steam', text)
+        if not v then return nil end
+        return 'steam', v
+    end
     if #text == 15 and text:lower():match('^1100001%x+$') then return 'steam', text:lower() end
     if #text == 40 and text:match('^%x+$') then return 'license', text:lower() end
     if text:match('^%d+$') and #text >= 17 and #text <= 22 then return 'discord', text end

@@ -9,6 +9,7 @@ local blip, targetProp, dumpsterProp, carryProp = nil, nil, nil, nil
 local carryAnim = nil
 local textShown = false
 local lastDistance = -1   -- last distance pushed to the HUD, in whole metres
+local targetGrounded = false
 
 local DUMPSTERS = { `prop_dumpster_01a`, `prop_dumpster_02a`, `prop_dumpster_02b`, `prop_dumpster_3a`, `prop_dumpster_4a` }
 
@@ -91,7 +92,7 @@ local function show(task)
     if task.stage == 1 and stage.target then
         local obj = Cl.LocalProp(stage.target.model, Cl.Vec(task.spotCoords), true)
         if stale(obj) then return end
-        targetProp = obj
+        targetProp, targetGrounded = obj, false
     end
 
     -- A dumpster at the dropoff, unless the map already has one there.
@@ -112,7 +113,11 @@ local function show(task)
         if stale(obj) then return end
         carryProp = obj
         if stage.carry.anim and Cl.LoadDict(stage.carry.anim.dict) then
-            if current ~= task then clearCarry() return end
+            -- Only undo what THIS call made — a newer show() may already own the carry.
+            if current ~= task then
+                if carryProp == obj then clearCarry() else Cl.Delete(obj) end
+                return
+            end
             carryAnim = stage.carry.anim
             TaskPlayAnim(ped, carryAnim.dict, carryAnim.clip, 8.0, -8.0, -1, carryAnim.flag or 49, 0, false, false, false)
         end
@@ -262,14 +267,6 @@ local function keepCarrying(ped)
 end
 
 local function nearLoop(task)
-    -- Props are created when the task arrives, often before the spot is streamed in, so the
-    -- ground snap may have failed. Within 25 m collision exists: snap again.
-    if targetProp and DoesEntityExist(targetProp) then
-        FreezeEntityPosition(targetProp, false)
-        PlaceObjectOnGroundProperly(targetProp)
-        FreezeEntityPosition(targetProp, true)
-    end
-
     local c = task.vec
     local x, y, z = c.x, c.y, c.z
     local markers = Config.Hud.marker ~= false
@@ -281,7 +278,17 @@ local function nearLoop(task)
         if dist > NEAR_EXIT then break end
 
         local now = GetGameTimer()
-        if now >= nextHud then nextHud = now + 250; pushDistance(dist) end
+        if now >= nextHud then
+            nextHud = now + 250
+            pushDistance(dist)
+            -- Props are made when the task arrives, often before the spot has streamed in, so
+            -- the first ground snap can miss. Retry until the ground is actually there.
+            if not targetGrounded and targetProp and HasCollisionLoadedAroundEntity(ped) then
+                FreezeEntityPosition(targetProp, false)
+                targetGrounded = PlaceObjectOnGroundProperly(targetProp)
+                FreezeEntityPosition(targetProp, true)
+            end
+        end
         if now >= nextCarry then nextCarry = now + 1000; keepCarrying(ped) end
 
         if markers then

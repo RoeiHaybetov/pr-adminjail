@@ -64,6 +64,12 @@ end
 
 function Jail.Left(s) return math.max(0, s.total - s.done) end
 
+--- Has this person ever actually stood in the yard for this sentence? Only then do they need
+--- moving out after a release while they are away.
+function Jail.WasInYard(s)
+    return not s.offline or s.done > 0 or s.escapes > 0
+end
+
 --- What the panel sees about a sentence.
 function Jail.Public(s, withIds)
     return {
@@ -171,14 +177,17 @@ local function resetTravel(inmate, yard)
     end
 end
 
---- `keepTravel`: the move was not seen by the server (a client-reported death), so the
---- task's travel-time origin is left alone.
-local function place(source, inmate, s, revive, keepTravel)
+--- `untrusted`: the reason for this move came from the client (a reported death). The ped is
+--- still put back, but no anti-escape state is touched — no fresh grace period, no settled
+--- reset, no new travel origin — so spamming the event buys nothing.
+local function place(source, inmate, s, revive, untrusted)
     local yard = Config.Yards[s.yard]
-    inmate.placedAt = AJ.Mono()
-    inmate.graceUntil = inmate.placedAt + Config.AntiEscape.placeGraceMs
-    inmate.settled = false
-    if not keepTravel then resetTravel(inmate, yard) end
+    if not untrusted then
+        inmate.placedAt = AJ.Mono()
+        inmate.graceUntil = inmate.placedAt + Config.AntiEscape.placeGraceMs
+        inmate.settled = false
+        resetTravel(inmate, yard)
+    end
     TriggerClientEvent(AJ.Event.PLACE, source, Util.Vec(yard.spawn), revive == true)
 end
 
@@ -283,7 +292,7 @@ function Jail.End(s, how, actor, reason)
         scanned[src] = nil
         Player(src).state:set('adminJailed', false, true)
         TriggerClientEvent(AJ.Event.STATE, src, false)
-        AJ.Hook('OnReleased', src, Jail.StatePayload(s), how)
+        -- OnReleased fires from the join move-out once a character loads, not here.
         s.source = nil
         online = false
     end
@@ -295,7 +304,7 @@ function Jail.End(s, how, actor, reason)
         ended_by_discord = actor and actor.discord or nil,
         ended_by_name = actor and actor.name and Util.Cut(actor.name, 64) or nil,
         end_reason = reason,
-        release_pending = (not online and not s.offline) and 1 or 0,
+        release_pending = (not online and Jail.WasInYard(s)) and 1 or 0,
     })
     Db.Event(s.id, status, actor, reason or (how == 'complete' and ('served %d tasks'):format(s.done) or nil))
 
@@ -317,7 +326,7 @@ function Jail.End(s, how, actor, reason)
         Log.Send('release', {
             title = 'Sentence cancelled',
             description = online and 'Released from the yard.'
-                or (s.offline and 'Released before serving any of it.' or 'Released while offline — moved out on next join.'),
+                or (Jail.WasInYard(s) and 'Released while offline — moved out on next join.' or 'Released before serving any of it.'),
             inmate = inmateIds, staff = actor and actor.ids or nil, staffRole = 'Released by',
             sentenceId = s.id,
             fields = {
@@ -353,7 +362,7 @@ function Jail.Create(actor, target, opts)
     for _, kind in ipairs(Identity.MATCH) do
         if ids[kind] then
             local key = kind .. ':' .. ids[kind]
-            if creating[key] then return false, 'error.already_jailed' end
+            if creating[key] then return false, 'error.already_jailed', '?' end
             keys[#keys + 1] = key
         end
     end
@@ -394,6 +403,13 @@ function Jail.Create(actor, target, opts)
 
     local s = fromRow(row)
     sentences[id] = s
+
+    -- The insert yielded: the target may have dropped or gone to a character screen since.
+    if loaded and not AJ.Fw.IsLoaded(target.source) then
+        loaded = false
+        s.offline = true
+        Db.UpdateSentence(id, { offline = 1 })
+    end
     Db.Event(id, 'jail', actor, ('%d tasks · %s · bucket %d (%s) · %s'):format(opts.tasks, yardKey, bucket, opts.mode, opts.reason))
 
     if loaded then
@@ -481,10 +497,13 @@ function Jail.Transfer(actor, s, yardKey, mode, custom, reason)
         Jail.Attach(s.source, s, false)
     elseif s.source then
         -- On a character screen: let go now, the join scan attaches them to the new yard
-        -- and bucket once a character loads.
-        AJ.Tasks.Clear(s.source)
-        inmates[s.source] = nil
-        scanned[s.source] = nil
+        -- and bucket once a character loads (and re-sends their state then).
+        local src = s.source
+        AJ.Tasks.Clear(src)
+        inmates[src] = nil
+        scanned[src] = nil
+        Player(src).state:set('adminJailed', false, true)
+        TriggerClientEvent(AJ.Event.STATE, src, false)
         s.source = nil
     end
     return true
@@ -563,6 +582,7 @@ local function revive(source, inmate, s, serverSaw)
     inmate.deadSince = nil
     AJ.Hook('Revive', source)
     place(source, inmate, s, true, not serverSaw)
+    if serverSaw then forceToSpawn(source, Config.Yards[s.yard]) end
 end
 
 function Jail.Died(source)
@@ -575,9 +595,10 @@ end
 
 --- The first exit after an attach is forgiven once: spawn selectors and housing scripts move
 --- a reconnecting player one time, and that is not them running. They still go back.
-local function forgive(source, inmate, s, now)
+local function forgive(source, inmate, s, now, what)
     if now >= (inmate.freeUntil or 0) then return false end
     inmate.freeUntil = 0
+    Db.Event(s.id, 'escape', nil, ('%s · forgiven (first exit after joining) · +0'):format(what))
     place(source, inmate, s)
     forceToSpawn(source, Config.Yards[s.yard])
     return true
@@ -591,6 +612,9 @@ local function watch(source, inmate, s)
     end
 
     if not inmate.placedAt then
+        -- A character (re)loaded: treat it like a fresh arrival — spawn selectors move them once.
+        inmate.everSettled, inmate.forced = false, 0
+        inmate.freeUntil = AJ.Mono() + FREE_EXIT_MS
         SetPlayerRoutingBucket(source, s.bucket)
         place(source, inmate, s)
         return
@@ -609,7 +633,7 @@ local function watch(source, inmate, s)
     if GetPlayerRoutingBucket(source) ~= s.bucket then
         local was = GetPlayerRoutingBucket(source)
         SetPlayerRoutingBucket(source, s.bucket)
-        if accountable and not forgive(source, inmate, s, now) then
+        if accountable and not forgive(source, inmate, s, now, 'bucket') then
             Jail.Escape(source, 'bucket', ('moved to bucket %d'):format(was))
         elseif not accountable then
             place(source, inmate, s)
@@ -641,11 +665,13 @@ local function watch(source, inmate, s)
 
     if not outside then
         inmate.settled, inmate.everSettled, inmate.forced = true, true, 0
+        -- Inside and quiet for 30 s: they have arrived, the one free exit is gone.
+        if inmate.freeUntil > 0 and now - inmate.placedAt > 30000 then inmate.freeUntil = 0 end
         return
     end
 
     if accountable then
-        if now >= inmate.graceUntil and not forgive(source, inmate, s, now) then
+        if now >= inmate.graceUntil and not forgive(source, inmate, s, now, 'leash') then
             Jail.Escape(source, 'leash', ('%.0fm from the yard'):format(Util.Dist2D(coords, leash.center)))
         end
     elseif now - inmate.placedAt >= cfg.forcePlaceAfterMs then
@@ -654,7 +680,7 @@ local function watch(source, inmate, s)
         inmate.forced = (inmate.forced or 0) + 1
         if inmate.forced >= 3 then
             inmate.forced = 0
-            if not forgive(source, inmate, s, now) then
+            if not forgive(source, inmate, s, now, 'leash') then
                 Jail.Escape(source, 'leash', 'never stayed in the yard after being placed')
             end
             return
@@ -720,8 +746,9 @@ local function scanOne(source)
             return
         end
 
-        -- Older ended sentences of this person must not teleport them again later.
-        for _, row in ipairs(Db.PendingReleases(ids)) do Db.ClearPending(row.id) end
+        -- Older ended sentences of this person must not teleport them again later. Not awaited:
+        -- nothing may yield between Jail.Find and Jail.Attach.
+        Db.ClearPendingFor(ids)
 
         local wasOffline = s.offline
         Db.BackfillIdentity(s.id, ids)

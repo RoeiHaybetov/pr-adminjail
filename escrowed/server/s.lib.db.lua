@@ -156,6 +156,20 @@ function Db.PendingReleases(ids)
         :format(table.concat(where, ' OR ')), values) or {}
 end
 
+--- Fire-and-forget: clears every pending move-out for whoever owns these identifiers.
+function Db.ClearPendingFor(ids)
+    local where, values = {}, {}
+    for _, kind in ipairs(AJ.Identity.MATCH) do
+        if ids[kind] then
+            where[#where + 1] = ('`%s` = ?'):format(kind)
+            values[#values + 1] = ids[kind]
+        end
+    end
+    if #where == 0 then return end
+    MySQL.update(('UPDATE `adminjail_sentences` SET `release_pending` = 0 WHERE `release_pending` = 1 AND (%s)')
+        :format(table.concat(where, ' OR ')), values)
+end
+
 function Db.ClearPending(id)
     MySQL.update('UPDATE `adminjail_sentences` SET `release_pending` = 0 WHERE `id` = ?', { id })
 end
