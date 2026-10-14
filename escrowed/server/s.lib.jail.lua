@@ -15,7 +15,8 @@ local sentences = {}
 ---   everSettled the server has seen them inside the leash at least once since attaching —
 ---               from then on every exit is an escape, even right after a re-placement
 ---   freeUntil   mono time until which the first exit is forgiven (spawn selectors after a
----               reconnect teleport the ped once; that is not an escape)
+---               reconnect teleport the ped once; that is not an escape). Ends early the
+---               moment they start a job — proof they are actually in the yard and playing.
 ---   forced      server force-placements in a row without ever seeing them inside
 ---   lastPenalty mono time of the last escape penalty
 ---   deadSince   mono time the server first saw them dead
@@ -579,7 +580,9 @@ end
 --- `serverSaw`: the watchdog saw the death itself. A client-reported death is trusted for
 --- the revive (worst case: a pointless revive) but not for resetting anti-cheat state.
 local function revive(source, inmate, s, serverSaw)
-    inmate.deadSince = nil
+    -- Only the server's own revive clears its death timer, so a dead ped spamming DIED still
+    -- gets the trusted revive (and the server-side move) after 6 s.
+    if serverSaw then inmate.deadSince = nil end
     AJ.Hook('Revive', source)
     place(source, inmate, s, true, not serverSaw)
     if serverSaw then forceToSpawn(source, Config.Yards[s.yard]) end
@@ -665,8 +668,6 @@ local function watch(source, inmate, s)
 
     if not outside then
         inmate.settled, inmate.everSettled, inmate.forced = true, true, 0
-        -- Inside and quiet for 30 s: they have arrived, the one free exit is gone.
-        if inmate.freeUntil > 0 and now - inmate.placedAt > 30000 then inmate.freeUntil = 0 end
         return
     end
 

@@ -207,6 +207,8 @@ lib.callback.register(AJ.Callback.START, function(source, id)
     end
 
     task.startedAt = AJ.Mono()
+    -- Working a job = really in the yard, not behind a spawn selector: no more free exit.
+    inmate.freeUntil = 0
     return { ok = true, durationMs = Config.Jobs[task.job].stages[task.stage].durationMs }
 end)
 
