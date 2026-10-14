@@ -69,6 +69,19 @@ and to show the character name in logs.
 
 ---
 
+## Download
+
+No Git needed. On the GitHub page of this repository:
+
+1. Click the green **Code** button → **Download ZIP**.
+2. Unzip it. The folder will be called `pr-adminjail-main` — **rename it to `pr-adminjail`**.
+3. Follow the install steps below.
+
+The `ui/src` folder and `ui/package.json` are only the source of the interface; the server
+uses the ready-built `ui/dist`. You can leave them in or delete them, either works.
+
+---
+
 ## Install
 
 1. Copy the folder to `resources/[custom]/pr-adminjail`.

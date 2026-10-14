@@ -134,6 +134,12 @@ function Tasks.Assign(source, inmate, s)
     send(source, yard, task)
 end
 
+--- Sends the current task again — for a client whose scripts started after it was sent.
+function Tasks.Resend(source)
+    local inmate, s = AJ.Jail.Inmate(source), AJ.Jail.ForSource(source)
+    if inmate and inmate.task and s then send(source, Config.Yards[s.yard], inmate.task) end
+end
+
 function Tasks.Clear(source)
     active[source] = nil
     local inmate = AJ.Jail.Inmate(source)

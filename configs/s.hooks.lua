@@ -31,14 +31,16 @@ function Hooks.Revive(source)
     end
 end
 
---- Runs after a player is placed into the yard (fresh sentence or reconnect).
---- `sentence` is a read-only copy: id, tasksTotal, tasksDone, yard, bucket, reason.
+--- Runs after a player is placed into the yard (fresh sentence, reconnect or transfer).
+--- `sentence` is a read-only copy: id, total, done, left, penalty, escapes, reason, staff,
+--- yard, yardLabel, mode, bucket.
 function Hooks.OnJailed(source, sentence)
     -- e.g. TriggerClientEvent('my-phone:client:disable', source, true)
 end
 
---- Runs after a player leaves the yard, served or released.
---- `how` is 'complete' or 'release'.
+--- Runs after a player leaves the yard, served or released — including a player released
+--- while on a character screen, and one moved out on join after a release while offline
+--- (then `sentence` only has `id`). `how` is 'complete' or 'release'.
 function Hooks.OnReleased(source, sentence, how)
     -- e.g. TriggerClientEvent('my-phone:client:disable', source, false)
 end

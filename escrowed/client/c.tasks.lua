@@ -28,7 +28,17 @@ local function clearCarry()
     carryProp = nil
 end
 
+--- Stops an ox_lib progress bar or skill check that a stage is running right now. Both
+--- cancel functions throw when nothing is active, so each is guarded (and pcall'd, for older
+--- ox_lib builds without the *Active helpers).
+local function cancelUi()
+    if not busy then return end
+    pcall(function() if lib.progressActive() then lib.cancelProgress() end end)
+    pcall(function() if lib.skillCheckActive() then lib.cancelSkillCheck() end end)
+end
+
 function Work.ClearAll()
+    cancelUi()
     clearBlip()
     clearCarry()
     Cl.Delete(targetProp) targetProp = nil
@@ -68,24 +78,41 @@ local function show(task)
         EndTextCommandSetBlipName(blip)
     end
 
+    -- Loading a model or dict yields. If the task was cleared or replaced meanwhile, whatever
+    -- was just created is thrown away instead of leaking onto a free player.
+    local function stale(entity)
+        if current == task then return false end
+        Cl.Delete(entity)
+        return true
+    end
+
     -- Something to clean up at the spot — gone once the first stage is done.
     Cl.Delete(targetProp) targetProp = nil
     if task.stage == 1 and stage.target then
-        targetProp = Cl.LocalProp(stage.target.model, Cl.Vec(task.spotCoords), true)
+        local obj = Cl.LocalProp(stage.target.model, Cl.Vec(task.spotCoords), true)
+        if stale(obj) then return end
+        targetProp = obj
     end
 
     -- A dumpster at the dropoff, unless the map already has one there.
     if stage.at == 'dropoff' then
         Cl.Delete(dumpsterProp) dumpsterProp = nil
-        if not hasDumpster(coords) then dumpsterProp = Cl.LocalProp('prop_dumpster_01a', coords, true) end
+        if not hasDumpster(coords) then
+            local obj = Cl.LocalProp('prop_dumpster_01a', coords, true)
+            if stale(obj) then return end
+            dumpsterProp = obj
+        end
     end
 
     -- Walking to this stage with something in hand.
     clearCarry()
     if stage.carry then
         local ped = PlayerPedId()
-        carryProp = Cl.AttachProp(ped, stage.carry)
+        local obj = Cl.AttachProp(ped, stage.carry)
+        if stale(obj) then return end
+        carryProp = obj
         if stage.carry.anim and Cl.LoadDict(stage.carry.anim.dict) then
+            if current ~= task then clearCarry() return end
             carryAnim = stage.carry.anim
             TaskPlayAnim(ped, carryAnim.dict, carryAnim.clip, 8.0, -8.0, -1, carryAnim.flag or 49, 0, false, false, false)
         end
@@ -103,6 +130,8 @@ RegisterNetEvent(AJ.Event.TASK, function(task)
         Work.ClearAll()
         return
     end
+    -- A different job replaced the one being worked on (transfer, re-roll): stop its UI.
+    if busy and current and task.id ~= current.id then cancelUi() end
     if not current or current.id ~= task.id then
         Cl.Delete(targetProp) targetProp = nil
         Cl.Delete(dumpsterProp) dumpsterProp = nil
@@ -148,10 +177,14 @@ local function perform()
         return
     end
 
+    -- Released, transferred or re-rolled mid-stage: the server already dropped this task.
+    local function gone() return not current or current.id ~= task.id end
+
     local ped = PlayerPedId()
     local coords = task.vec
     TaskTurnPedToFaceCoord(ped, coords.x, coords.y, coords.z, 700)
     Wait(700)
+    if gone() then busy = false return end
 
     if stage.carry then clearCarry() end
     local prop = startAnim(ped, stage)
@@ -162,6 +195,7 @@ local function perform()
     local ok = true
 
     for i = 1, segments do
+        if gone() then ok = false break end
         if not lib.progressBar({
             duration = per,
             label = ('%s  (%d/%d)'):format(task.stageLabel, i, segments),
@@ -169,19 +203,21 @@ local function perform()
             disable = { move = true, car = true, combat = true, sprint = true },
         }) then
             ok = false
-            Cl.Notify('task.cancelled', nil, 'error')
+            if not gone() then Cl.Notify('task.cancelled', nil, 'error') end
             break
         end
         if checks[i] then
+            if gone() then ok = false break end
             if not lib.skillCheck(checks[i], Config.SkillKeys) then
                 ok = false
-                Cl.Notify('task.failed', nil, 'error')
+                if not gone() then Cl.Notify('task.failed', nil, 'error') end
                 break
             end
         end
     end
 
     stopAnim(ped, stage, prop)
+    if gone() then busy = false return end
 
     if ok then
         local done = lib.callback.await(AJ.Callback.FINISH, false, task.id)
@@ -226,6 +262,14 @@ local function keepCarrying(ped)
 end
 
 local function nearLoop(task)
+    -- Props are created when the task arrives, often before the spot is streamed in, so the
+    -- ground snap may have failed. Within 25 m collision exists: snap again.
+    if targetProp and DoesEntityExist(targetProp) then
+        FreezeEntityPosition(targetProp, false)
+        PlaceObjectOnGroundProperly(targetProp)
+        FreezeEntityPosition(targetProp, true)
+    end
+
     local c = task.vec
     local x, y, z = c.x, c.y, c.z
     local markers = Config.Hud.marker ~= false

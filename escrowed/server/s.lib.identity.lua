@@ -59,8 +59,32 @@ function Identity.Forget(source)
     known[source] = nil
 end
 
---- Parse whatever a staff member pasted: `discord:123`, `steam:1100...`, a raw 17+ digit
---- Discord id, a 40-hex licence, a steam64. Returns kind, value — or nil.
+--- Normalises one identifier value to exactly what GetPlayerIdentifierByType gives (prefix
+--- stripped, lowercase hex), or nil if it cannot be one. A value that can never match a
+--- real player must be refused, not stored as a sentence nobody ever serves.
+local function normalise(kind, value)
+    if type(value) ~= 'string' then return nil end
+    value = value:gsub('%s', '')
+    if kind == 'license' then
+        value = value:lower()
+        return (#value == 40 and value:match('^%x+$')) and value or nil
+    elseif kind == 'steam' then
+        if value:match('^7656119%d+$') then
+            local n = math.tointeger(tonumber(value))
+            return n and ('%x'):format(n) or nil
+        end
+        value = value:lower()
+        return value:match('^1100001%x+$') and value or nil
+    elseif kind == 'discord' then
+        return (value:match('^%d+$') and #value >= 15 and #value <= 22) and value or nil
+    elseif kind == 'fivem' then
+        return value:match('^%d+$') and value or nil
+    end
+    return nil
+end
+
+--- Parse whatever a staff member pasted: `discord:123`, `<@123>`, `steam:1100…`, a steam64,
+--- a raw 40-hex licence, a raw Discord id. Returns kind, value — or nil.
 function Identity.Parse(text)
     if type(text) ~= 'string' then return nil end
     text = text:gsub('%s', ''):gsub('^<@!?(%d+)>$', 'discord:%1')
@@ -69,20 +93,17 @@ function Identity.Parse(text)
     local kind, value = text:match('^(%a+%d?):(.+)$')
     if kind then
         kind = kind:lower()
-        if kind == 'license' or kind == 'discord' or kind == 'steam' or kind == 'fivem' then
-            return kind, value
-        end
-        return nil
+        value = normalise(kind, value)
+        if not value then return nil end
+        return kind, value
     end
 
-    if text:match('^7656119%d+$') then
-        local n = math.tointeger(tonumber(text))
-        if not n then return nil end
-        return 'steam', ('%x'):format(n)
-    end
-    if text:match('^%d+$') and #text >= 15 then return 'discord', text end
-    if text:match('^%x+$') and #text == 40 then return 'license', text:lower() end
-    if text:match('^1100001%x+$') then return 'steam', text:lower() end
+    -- Bare values. Steam hex is checked BEFORE the Discord rule: a steam hex whose account
+    -- digits are all 0-9 is otherwise indistinguishable from a number.
+    if text:match('^7656119%d+$') then return 'steam', normalise('steam', text) end
+    if #text == 15 and text:lower():match('^1100001%x+$') then return 'steam', text:lower() end
+    if #text == 40 and text:match('^%x+$') then return 'license', text:lower() end
+    if text:match('^%d+$') and #text >= 17 and #text <= 22 then return 'discord', text end
     return nil
 end
 

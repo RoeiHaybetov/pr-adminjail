@@ -10,8 +10,24 @@ local function started(resource)
     return state == 'started' or state == 'starting'
 end
 
+local function fetchCore(f)
+    if f == 'qb' then
+        local ok, obj = pcall(function() return exports['qb-core']:GetCoreObject() end)
+        return ok and obj or nil
+    elseif f == 'esx' then
+        local ok, obj = pcall(function() return exports['es_extended']:getSharedObject() end)
+        return ok and obj or nil
+    end
+    return nil
+end
+
 local function resolve()
-    if flavour then return flavour end
+    if flavour then
+        -- A failed lookup is never cached: without a core object every player would read as
+        -- "not loaded" and the jail would stop enforcing anything.
+        if (flavour == 'qb' or flavour == 'esx') and not core then core = fetchCore(flavour) end
+        return flavour
+    end
 
     local forced = Config.Framework
     if forced == 'qbx' or forced == 'qb' or forced == 'esx' or forced == 'standalone' then
@@ -26,16 +42,17 @@ local function resolve()
         flavour = 'standalone'
     end
 
-    if flavour == 'qb' then
-        local ok, obj = pcall(function() return exports['qb-core']:GetCoreObject() end)
-        core = ok and obj or nil
-    elseif flavour == 'esx' then
-        local ok, obj = pcall(function() return exports['es_extended']:getSharedObject() end)
-        core = ok and obj or nil
-    end
-
+    core = fetchCore(flavour)
     return flavour
 end
+
+-- A framework restarted (or started late) under us: its old core object is dead. Forget it
+-- and resolve again on the next call.
+AddEventHandler('onResourceStart', function(resource)
+    if resource == 'qbx_core' or resource == 'qb-core' or resource == 'es_extended' then
+        flavour, core = nil, nil
+    end
+end)
 
 function Fw.Flavour()
     return resolve()

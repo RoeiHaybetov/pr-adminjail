@@ -75,8 +75,17 @@ AddEventHandler('playerDropped', function(reason)
     Util.ClearRate(source)
 end)
 
+--- The client's scripts are up. Anything sent before that (a resource restart with slow
+--- clients) was dropped, so an inmate gets their state and task again.
 RegisterNetEvent(AJ.Event.READY, function()
+    local source = source
     AJ.Fw.MarkReady(source)
+    if not Util.Rate(source, 'ready') then return end
+    local s = Jail.ForSource(source)
+    if s then
+        Jail.Sync(s)
+        AJ.Tasks.Resend(source)
+    end
 end)
 
 RegisterNetEvent(AJ.Event.DIED, function()
@@ -125,10 +134,10 @@ RegisterCommand(Config.Commands.jail, function(source, args)
         reason = 'No reason given'
     end
 
-    local ok, result = Jail.Create(actor, { source = target }, {
+    local ok, result, existing = Jail.Create(actor, { source = target }, {
         tasks = tasks, yard = Config.Sentence.defaultYard, mode = Config.Buckets.default, reason = reason,
     })
-    if not ok then return deny(source, result) end
+    if not ok then return AJ.Notify(source, result, existing and { existing } or { '?' }, 'error') end
     AJ.Notify(source, 'cmd.jailed', { GetPlayerName(target) or target, tasks }, 'success')
 end, false)
 

@@ -128,14 +128,18 @@ function Db.UpdateSentence(id, fields)
 end
 
 --- Fills identifiers a sentence was created without (offline jail by Discord id, say), the
---- first time the person is seen online. Never overwrites one that is already set.
+--- first time the person is seen online. Never overwrites one that is already set. Also
+--- marks the sentence as having reached the yard (`offline` = 0) — that assignment is LAST,
+--- because MySQL evaluates SET left to right and the name IF() must see the old value.
 function Db.BackfillIdentity(id, ids)
     MySQL.update([[UPDATE `adminjail_sentences` SET
         `license` = COALESCE(`license`, ?), `discord` = COALESCE(`discord`, ?),
         `steam` = COALESCE(`steam`, ?), `fivem` = COALESCE(`fivem`, ?),
         `char_name` = COALESCE(?, `char_name`),
-        `name` = IF(`offline` = 1 AND `name` LIKE 'offline:%', ?, `name`)
-        WHERE `id` = ?]], { ids.license, ids.discord, ids.steam, ids.fivem, ids.char, ids.name, id })
+        `name` = IF(`offline` = 1 AND `name` LIKE 'offline:%', ?, `name`),
+        `offline` = 0
+        WHERE `id` = ?]], { ids.license, ids.discord, ids.steam, ids.fivem,
+            ids.char and AJ.Util.Cut(ids.char, 64) or nil, AJ.Util.Cut(ids.name, 64), id })
 end
 
 --- Ended sentences that still need the player moved out of the yard on their next join.
@@ -168,9 +172,13 @@ function Db.History(opts)
         local like = '%' .. opts.search:gsub('[%%_\\]', '\\%0') .. '%'
         where[#where + 1] = [[(`name` LIKE ? OR `char_name` LIKE ? OR `reason` LIKE ? OR `staff_name` LIKE ?
             OR `discord` = ? OR `license` = ? OR `steam` = ? OR `fivem` = ? OR `id` = ?)]]
+        -- Identifiers are stored without their prefix; the panel shows and copies them with
+        -- it ("discord:123…"), so parse first and fall back to the raw text.
+        local _, parsed = AJ.Identity.Parse(opts.search)
+        local exact = parsed or opts.search
         for _ = 1, 4 do values[#values + 1] = like end
-        for _ = 1, 4 do values[#values + 1] = opts.search end
-        values[#values + 1] = tonumber(opts.search) or -1
+        for _ = 1, 4 do values[#values + 1] = exact end
+        values[#values + 1] = tonumber((opts.search:gsub('^#', ''))) or -1
     end
 
     local pageSize = 25
@@ -193,8 +201,8 @@ end
 
 function Db.Event(sentenceId, kind, actor, detail)
     MySQL.insert('INSERT INTO `adminjail_events` (`sentence_id`, `kind`, `actor_discord`, `actor_name`, `detail`, `created_at`) VALUES (?, ?, ?, ?, ?, ?)', {
-        sentenceId, kind, actor and actor.discord or nil, actor and actor.name and actor.name:sub(1, 64) or nil,
-        detail and tostring(detail):sub(1, 512) or nil, AJ.Now(),
+        sentenceId, kind, actor and actor.discord or nil, actor and actor.name and AJ.Util.Cut(actor.name, 64) or nil,
+        detail and AJ.Util.Cut(tostring(detail), 500) or nil, AJ.Now(),
     })
 end
 

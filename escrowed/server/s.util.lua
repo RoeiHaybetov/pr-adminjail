@@ -36,10 +36,25 @@ function AJ.Hook(name, ...)
     if not ok then AJ.Print(('^1hook %s failed: %s^0'):format(name, tostring(err))) end
 end
 
+--- Cuts to at most `maxChars` CHARACTERS, never in the middle of a UTF-8 sequence — a
+--- Hebrew letter is two bytes, and a half letter breaks the database and Discord.
+function Util.Cut(value, maxChars)
+    if type(value) ~= 'string' then return value end
+    local n = utf8.len(value)
+    if n then
+        if n > maxChars then value = value:sub(1, utf8.offset(value, maxChars + 1) - 1) end
+        return value
+    end
+    -- Invalid UTF-8 already: fall back to bytes, then drop any trailing partial sequence.
+    value = value:sub(1, maxChars)
+    while #value > 0 and not utf8.len(value) do value = value:sub(1, -2) end
+    return value
+end
+
 function Util.Trim(value, maxLength)
     if type(value) ~= 'string' then return '' end
     value = value:gsub('[%c]', ' '):gsub('^%s+', ''):gsub('%s+$', '')
-    if maxLength and #value > maxLength then value = value:sub(1, maxLength) end
+    if maxLength then value = Util.Cut(value, maxLength) end
     return value
 end
 
@@ -94,6 +109,7 @@ local LIMITS = {
     abort  = { max = 10, windowMs = 5000 },
     died   = { max = 3,  windowMs = 10000 },
     cmd    = { max = 6,  windowMs = 5000 },
+    ready  = { max = 3,  windowMs = 10000 },
 }
 
 local buckets = {}

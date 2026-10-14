@@ -268,7 +268,8 @@ Config.AntiEscape = {
     --- Server tolerance on stage timing, to absorb network latency.
     timingToleranceMs = 600,
 
-    --- Make inmates immune to damage, disarm them, and lock their inventory.
+    --- Make inmates immune to damage, disarm them, and lock their inventory. Invincibility and
+    --- the inventory lock are client-side comfort; disarming is also enforced by the server.
     invincible = true,
     disarm = true,
     lockInventory = true,

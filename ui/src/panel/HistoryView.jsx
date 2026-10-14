@@ -19,7 +19,12 @@ function IdRow({ kind, value, link }) {
       <span>{kind}</span>
       <span className="v mono">{full}</span>
       <span className="row" style={{ gap: 4 }}>
-        {link && <a className="btn sm ghost" href={link} target="_blank" rel="noreferrer"><ExternalLink size={13} /></a>}
+        {link && (
+          // FiveM's browser drops target=_blank popups; openUrl is its supported way out.
+          <button className="btn sm ghost" onClick={() => (window.invokeNative ? window.invokeNative('openUrl', link) : window.open(link, '_blank'))}>
+            <ExternalLink size={13} />
+          </button>
+        )}
         <button className="btn sm ghost" onClick={() => nui('copy', { text: full })}><Copy size={13} /></button>
       </span>
     </div>

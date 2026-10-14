@@ -17,7 +17,16 @@ Log.Color = {
     disconnect = 0x7F8C8D, staff = 0x9B59B6, progress = 0x5865F2,
 }
 
-local MAX_EMBEDS, MAX_QUEUE = 10, 200
+--- Discord rejects a whole message whose embeds add up to more than 6000 characters, so
+--- batches are cut well below that.
+local MAX_EMBEDS, MAX_QUEUE, MAX_BATCH_CHARS = 10, 200, 5500
+local DROPPED_TITLE = 'Logs dropped'
+
+local function embedSize(e)
+    local n = #(e.title or '') + #(e.description or '') + #((e.footer and e.footer.text) or '')
+    for _, f in ipairs(e.fields or {}) do n = n + #(f.name or '') + #(f.value or '') end
+    return n
+end
 
 local function webhookFor(event)
     local hooks = Config.Webhooks or {}
@@ -38,7 +47,9 @@ end
 
 local queues = {}
 
-local function pump(url)
+local pump
+
+function pump(url)
     local q = queues[url]
     if q.pumping then return end
     q.pumping = true
@@ -48,14 +59,18 @@ local function pump(url)
             local wait = q.nextAt - GetGameTimer()
             if wait > 0 then Wait(wait) end
 
-            local batch = {}
+            local batch, size = {}, 0
             if q.dropped > 0 then
-                batch[1] = { title = 'Logs dropped', color = 0xE67E22,
+                batch[1] = { title = DROPPED_TITLE, color = 0xE67E22,
                     description = ('%d log line(s) were dropped — the queue was full.'):format(q.dropped) }
+                size = embedSize(batch[1])
                 q.dropped = 0
             end
             while #batch < MAX_EMBEDS and #q.items > 0 do
+                local nextSize = embedSize(q.items[1])
+                if #batch > 0 and size + nextSize > MAX_BATCH_CHARS then break end
                 batch[#batch + 1] = table.remove(q.items, 1)
+                size = size + nextSize
             end
 
             local interval = math.max(500, tonumber(Config.Logging.postIntervalMs) or 2000)
@@ -65,6 +80,11 @@ local function pump(url)
                 if status == 429 then
                     local after = headers and (headers['retry-after'] or headers['Retry-After'])
                     q.nextAt = GetGameTimer() + math.max(interval, math.floor((tonumber(after) or 2) * 1000))
+                    -- Rate limited: nothing was posted. Put the batch back at the front.
+                    for i = #batch, 1, -1 do
+                        if batch[i].title ~= DROPPED_TITLE then table.insert(q.items, 1, batch[i]) end
+                    end
+                    pump(url)
                 elseif status and (status < 200 or status >= 300) then
                     AJ.Print(('^3webhook answered HTTP %s — check the URL in configs/s.secrets.lua^0'):format(tostring(status)))
                 end
@@ -101,7 +121,8 @@ local function code(v) return ('`%s`'):format(tostring(v):gsub('`', "'")) end
 
 local function clip(text, n)
     text = tostring(text or '')
-    if #text > n then return text:sub(1, n - 1) .. '…' end
+    local cut = AJ.Util.Cut(text, n - 1)
+    if cut ~= text then return cut .. '…' end
     return text
 end
 
